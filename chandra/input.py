@@ -35,7 +35,7 @@ def load_pdf_images(
 
     images = []
     for page in range(len(doc)):
-        if not page_range or page in page_range:
+        if not page_range or page + 1 in page_range:
             page_obj = doc[page]
             min_page_dim = min(page_obj.get_width(), page_obj.get_height())
             scale_dpi = (min_pdf_image_dim / min_page_dim) * 72
