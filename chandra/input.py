@@ -40,7 +40,6 @@ def load_pdf_images(
             min_page_dim = min(page_obj.get_width(), page_obj.get_height())
             scale_dpi = (min_pdf_image_dim / min_page_dim) * 72
             scale_dpi = max(scale_dpi, image_dpi)
-            page_obj = doc[page]
             flatten(page_obj)
             page_obj = doc[page]
             pil_image = page_obj.render(scale=scale_dpi / 72).to_pil().convert("RGB")

@@ -176,7 +176,7 @@ def save_merged_output(
     help="Number of pages to process in a batch.",
 )
 @click.option(
-    "--paginate_output",
+    "--paginate-output",
     is_flag=True,
     default=False,
 )
