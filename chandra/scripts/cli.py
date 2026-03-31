@@ -45,6 +45,7 @@ def save_merged_output(
     results: List,
     save_images: bool = True,
     save_html: bool = True,
+    save_chunks: bool = True,
     paginate_output: bool = False,
 ):
     """Save merged OCR results for all pages to output directory."""
@@ -57,6 +58,7 @@ def save_merged_output(
     all_markdown = []
     all_html = []
     all_metadata = []
+    all_chunks = []
     total_tokens = 0
     total_chunks = 0
     total_images = 0
@@ -85,6 +87,9 @@ def save_merged_output(
         }
         all_metadata.append(page_metadata)
 
+        if save_chunks:
+            all_chunks.append({"page_num": page_num, "chunks": result.chunks})
+
         # Save extracted images if requested
         if save_images and result.images:
             images_dir = file_output_dir
@@ -104,6 +109,12 @@ def save_merged_output(
         html_path = file_output_dir / f"{safe_name}.html"
         with open(html_path, "w", encoding="utf-8") as f:
             f.write("".join(all_html))
+
+    # Save chunks as JSON if requested
+    if save_chunks:
+        chunks_path = file_output_dir / f"{safe_name}_chunks.json"
+        with open(chunks_path, "w", encoding="utf-8") as f:
+            json.dump(all_chunks, f, indent=2)
 
     # Save combined metadata
     metadata = {
@@ -170,6 +181,11 @@ def save_merged_output(
     help="Save HTML output files.",
 )
 @click.option(
+    "--save-chunks/--no-chunks",
+    default=True,
+    help="Save layout chunks as JSON output file.",
+)
+@click.option(
     "--batch-size",
     type=int,
     default=None,
@@ -191,6 +207,7 @@ def main(
     include_images: bool,
     include_headers_footers: bool,
     save_html: bool,
+    save_chunks: bool,
     batch_size: int,
     paginate_output: bool,
 ):
@@ -279,6 +296,7 @@ def main(
                 all_results,
                 save_images=include_images,
                 save_html=save_html,
+                save_chunks=save_chunks,
                 paginate_output=paginate_output,
             )
 
