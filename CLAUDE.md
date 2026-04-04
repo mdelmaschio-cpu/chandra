@@ -19,7 +19,7 @@ chandra/               # Main Python package
 ├── output.py          # HTML/Markdown parsing and output formatting
 ├── prompts.py         # OCR prompt templates and allowed HTML tags
 ├── settings.py        # Pydantic settings (env-var driven)
-├── util.py            # Shared utilities
+├── util.py            # Layout visualization utilities
 ├── model/             # Inference backends
 │   ├── __init__.py    # InferenceManager (factory for hf/vllm)
 │   ├── hf.py          # HuggingFace Transformers backend
@@ -31,7 +31,9 @@ chandra/               # Main Python package
     ├── app.py          # Streamlit web app
     ├── run_app.py      # Web app entry point
     ├── vllm.py         # vLLM Docker server launcher
-    └── screenshot_app.py
+    ├── screenshot_app.py  # Flask app for layout visualization
+    └── templates/
+        └── screenshot.html  # HTML template for screenshot app
 tests/
 ├── conftest.py         # Pytest fixtures
 └── integration/
@@ -121,7 +123,18 @@ Settings are managed via `chandra/settings.py` using Pydantic `BaseSettings`. Al
 | `VLLM_API_BASE` | `http://localhost:8000/v1` | vLLM server URL |
 | `VLLM_API_KEY` | `EMPTY` | vLLM API key |
 | `VLLM_MODEL_NAME` | `chandra` | Model name served by vLLM |
+| `VLLM_GPUS` | `0` | GPU device IDs for vLLM server |
 | `MAX_VLLM_RETRIES` | `6` | Retry limit for vLLM requests |
+
+---
+
+## Data Models
+
+All inter-module data exchange uses schema classes from `chandra/model/schema.py`:
+
+- **`BatchInputItem`** — input to inference: `image` (PIL Image), `prompt` (optional override), `prompt_type` (`"ocr_layout"` or `"ocr"`)
+- **`GenerationResult`** — raw inference output: `raw` (HTML string), `token_count`, `error` (bool)
+- **`BatchOutputItem`** — fully processed output: `markdown`, `html`, `chunks` (layout blocks dict), `raw`, `page_box`, `token_count`, `images` (dict of PIL Images), `error`
 
 ---
 
@@ -139,6 +152,7 @@ Settings are managed via `chandra/settings.py` using Pydantic `BaseSettings`. Al
 - Suitable for production / high-throughput
 - Default batch size: 28
 - Requires a running vLLM server (see `chandra_vllm`)
+- Uses parallel `ThreadPoolExecutor` with retry logic and repeat-token detection
 
 ---
 
@@ -155,17 +169,37 @@ chandra <input_path> <output_path> --method hf
 chandra doc.pdf output/ --page-range 1-5,7,9-12
 
 # Control output
-chandra doc.pdf output/ --no-images --no-html
+chandra doc.pdf output/ --no-images --no-html --no-chunks
 
 # Parallel vLLM processing
 chandra docs/ output/ --max-workers 8 --batch-size 28
+
+# Paginate output (add page separators in Markdown/HTML)
+chandra doc.pdf output/ --paginate-output
 ```
+
+**All CLI options:**
+
+| Option | Default | Description |
+|---|---|---|
+| `--method [hf\|vllm]` | `vllm` | Inference backend |
+| `--page-range TEXT` | all pages | Pages to process, e.g. `1-5,7,9-12` |
+| `--max-output-tokens INT` | from settings | Token limit per page |
+| `--max-workers INT` | 4 | Parallel workers (vLLM only) |
+| `--max-retries INT` | from settings | Retry limit (vLLM only) |
+| `--batch-size INT` | 1 (hf) / 28 (vllm) | Pages per batch |
+| `--include-images/--no-images` | include | Extract and save figure images |
+| `--include-headers-footers/--no-headers-footers` | exclude | Include page headers/footers |
+| `--save-html/--no-html` | save | Write `.html` output file |
+| `--save-chunks/--no-chunks` | save | Write `_chunks.json` output file |
+| `--paginate-output` | off | Add page separators to output |
 
 Output per file is saved to `<output_path>/<stem>/`:
 - `<stem>.md` — Markdown
 - `<stem>.html` — HTML (unless `--no-html`)
-- `<stem>_metadata.json` — page counts, token counts, bounding boxes
-- Extracted images (PNG files, unless `--no-images`)
+- `<stem>_chunks.json` — layout blocks with bounding boxes (unless `--no-chunks`)
+- `<stem>_metadata.json` — page counts, token counts, image counts
+- Extracted images as `.webp` files (unless `--no-images`)
 
 ---
 
@@ -188,14 +222,16 @@ Input (PDF/image)
 
 The model outputs structured HTML with layout blocks. Each block has:
 - A semantic tag (paragraph, heading, table, equation, figure, etc.)
-- A `bbox` attribute with normalized coordinates `[x0, y0, x1, y1]` scaled to `BBOX_SCALE` (default 1000)
-- A `class` attribute identifying the block type
+- A `data-bbox` attribute with normalized coordinates `[x0, y0, x1, y1]` scaled to `BBOX_SCALE` (default 1000)
+- A `data-label` attribute identifying the block type
+
+**Supported layout labels (17 types):** `Caption`, `Footnote`, `Equation-Block`, `List-Group`, `Page-Header`, `Page-Footer`, `Image`, `Section-Header`, `Table`, `Text`, `Complex-Block`, `Code-Block`, `Form`, `Table-Of-Contents`, `Figure`, `Chemical-Block`, `Diagram`, `Bibliography`, `Blank-Page`
 
 `output.py` parses this HTML into:
-- Clean Markdown (via custom `Markdownify` subclass)
+- Clean Markdown (via custom `Markdownify` subclass with math/table support)
 - Filtered HTML (optional header/footer removal, image toggling)
-- `chunks` — list of layout blocks with bounding boxes
-- `images` — extracted figure images as PIL objects
+- `chunks` — list of layout blocks with bounding boxes (saved as `_chunks.json`)
+- `images` — extracted figure images as PIL objects (saved as `.webp`)
 
 ---
 
@@ -206,6 +242,19 @@ Two prompt types in `chandra/prompts.py`:
 - `ocr` — plain OCR without layout metadata
 
 Prompt type is set per `BatchInputItem` and selects the template at inference time.
+
+---
+
+## Web Applications
+
+### Streamlit App (`chandra_app`)
+Interactive single-page OCR UI. Supports file upload, page selection, real-time processing, and Markdown download. Launched via `chandra_app` or `uv run python -m chandra.scripts.run_app`.
+
+### Screenshot App (`chandra_screenshot`)
+Flask-based layout visualization server. Renders color-coded layout blocks overlaid on the original image with side-by-side extracted text. REST API at `/process`. Useful for debugging and demos.
+
+### vLLM Server (`chandra_vllm`)
+Docker-based vLLM server launcher. Automatically scales configuration (max batch tokens, sequence limits) based on GPU VRAM. Supports H100, A100, L40s, A10, L4, RTX4090, RTX3090, T4. Configure GPU selection via `VLLM_GPUS`.
 
 ---
 
@@ -244,3 +293,4 @@ To release: bump `version` in `pyproject.toml`, commit, then push a tag `vX.Y.Z`
 - **Schema-driven I/O** — all inter-module data uses `BatchInputItem`, `BatchOutputItem`, and `GenerationResult` from `chandra/model/schema.py`.
 - **Output parsing is separate from inference** — `output.py` handles all HTML/Markdown transformation; inference code only returns raw HTML strings.
 - **Ruff enforced** — run `pre-commit run --all-files` before committing.
+- **Images saved as `.webp`** — extracted figure images use WebP format, not PNG.
