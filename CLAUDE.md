@@ -143,7 +143,9 @@ All inter-module data exchange uses schema classes from `chandra/model/schema.py
 `InferenceManager` (in `chandra/model/__init__.py`) abstracts two backends:
 
 ### HuggingFace (`--method hf`)
-- Loads `AutoModelForImageTextToText` locally
+- Loads `AutoModelForImageTextToText` + `AutoProcessor` locally
+- `dtype=bfloat16`, `device_map="auto"` (overridden by `TORCH_DEVICE`)
+- Attention implementation set via `TORCH_ATTN` (`sdpa` or `flash_attention_2`)
 - Suitable for single-GPU development
 - Default batch size: 1
 
@@ -215,13 +217,15 @@ Output per file is saved to `<output_path>/<stem>/`:
 
 ```
 Input (PDF/image)
-  → input.py: load_file()          # Render pages to PIL Images
+  → input.py: load_file()              # Render pages to PIL Images
+    (PDFs: init_forms() + flatten to rasterize form fields)
+  → model/util.py: scale_to_fit()      # Enforce MIN_IMAGE_DIM / MIN_PDF_IMAGE_DIM
   → BatchInputItem(image, prompt)
-  → InferenceManager.generate()    # Run model (hf or vllm)
+  → InferenceManager.generate()        # Run model (hf or vllm)
   → GenerationResult(raw HTML)
   → output.py: parse_markdown/html/chunks/extract_images
   → BatchOutputItem(markdown, html, chunks, images, metadata)
-  → cli.py: save_merged_output()   # Write files to disk
+  → cli.py: save_merged_output()       # Write files to disk
 ```
 
 ---
