@@ -153,6 +153,14 @@ All inter-module data exchange uses schema classes from `chandra/model/schema.py
 - Default batch size: 28
 - Requires a running vLLM server (see `chandra_vllm`)
 - Uses parallel `ThreadPoolExecutor` with retry logic and repeat-token detection
+- **Retry behavior**: on repeat-token detection, temperature scales up by `0.2*(retries+1)` (capped at 0.8) and `top_p` shifts from 0.1 → 0.95; sleeps `2*(retries+1)` seconds between retries
+
+---
+
+## Supported Input Formats
+
+`chandra` accepts individual files or directories. Supported file types:
+`.pdf`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.tiff`, `.bmp`
 
 ---
 
@@ -185,7 +193,7 @@ chandra doc.pdf output/ --paginate-output
 | `--method [hf\|vllm]` | `vllm` | Inference backend |
 | `--page-range TEXT` | all pages | Pages to process, e.g. `1-5,7,9-12` |
 | `--max-output-tokens INT` | from settings | Token limit per page |
-| `--max-workers INT` | 4 | Parallel workers (vLLM only) |
+| `--max-workers INT` | None (defaults to `min(64, batch_size)` in vLLM) | Parallel workers (vLLM only) |
 | `--max-retries INT` | from settings | Retry limit (vLLM only) |
 | `--batch-size INT` | 1 (hf) / 28 (vllm) | Pages per batch |
 | `--include-images/--no-images` | include | Extract and save figure images |
@@ -225,7 +233,7 @@ The model outputs structured HTML with layout blocks. Each block has:
 - A `data-bbox` attribute with normalized coordinates `[x0, y0, x1, y1]` scaled to `BBOX_SCALE` (default 1000)
 - A `data-label` attribute identifying the block type
 
-**Supported layout labels (17 types):** `Caption`, `Footnote`, `Equation-Block`, `List-Group`, `Page-Header`, `Page-Footer`, `Image`, `Section-Header`, `Table`, `Text`, `Complex-Block`, `Code-Block`, `Form`, `Table-Of-Contents`, `Figure`, `Chemical-Block`, `Diagram`, `Bibliography`, `Blank-Page`
+**Supported layout labels (19 types):** `Caption`, `Footnote`, `Equation-Block`, `List-Group`, `Page-Header`, `Page-Footer`, `Image`, `Section-Header`, `Table`, `Text`, `Complex-Block`, `Code-Block`, `Form`, `Table-Of-Contents`, `Figure`, `Chemical-Block`, `Diagram`, `Bibliography`, `Blank-Page`
 
 `output.py` parses this HTML into:
 - Clean Markdown (via custom `Markdownify` subclass with math/table support)
@@ -256,6 +264,8 @@ Flask-based layout visualization server. Renders color-coded layout blocks overl
 ### vLLM Server (`chandra_vllm`)
 Docker-based vLLM server launcher. Automatically scales configuration (max batch tokens, sequence limits) based on GPU VRAM. Supports H100, A100, L40s, A10, L4, RTX4090, RTX3090, T4. Configure GPU selection via `VLLM_GPUS`.
 
+Key fixed parameters: vLLM v0.17.0, bfloat16, `--max-model-len 18000`, `--gpu-memory-utilization 0.85`, `--enable-prefix-caching`, `min_pixels=3136`, `max_pixels=6291456`. Batch token and sequence limits are proportionally scaled from H100 baseline (8192 tokens / 64 seqs) based on the detected GPU's VRAM.
+
 ---
 
 ## Adding a New Inference Backend
@@ -271,7 +281,7 @@ Docker-based vLLM server launcher. Automatically scales configuration (max batch
 ### Integration Tests (`integration.yml`)
 - Trigger: every push
 - Runner: `t4_gpu` (GPU required)
-- Installs system libs: `libpango`, `libharfbuzz`, `libcairo2`, `libgdk-pixbuf2.0`, `libffi-dev`
+- Installs system libs: `libpango`, `libharfbuzz`, `libpangoft2`, `libcairo2`, `libgdk-pixbuf2.0`, `libffi-dev`, `shared-mime-info`
 - Runs: `uv run pytest tests/integration`
 - Env secrets: `HF_TOKEN`
 
